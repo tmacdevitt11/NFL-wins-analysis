@@ -1,0 +1,227 @@
+---
+title: "What variables most impact a teams chances of winning a football game?"
+output: html_document
+date: '2022-09-13'
+---
+```{r,echo=TRUE, message=FALSE, warning=FALSE}
+# load packages and data
+library(tidyverse)
+library(anytime)
+library(lubridate)
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(naniar)
+library(MASS)
+library(yardstick)
+
+f_ball <- read_csv("~/Desktop/Data Analysis/Foundations of DS w: R/Final project/pbp-2019.csv")
+
+```
+
+
+## A note:
+# data set ranges from sept 5 - december 23, missing the last week of regular season. 
+
+## cleaning:
+```{r}
+#Full duplicates?
+count(distinct(f_ball)) == nrow(f_ball)  #no full duplicates
+
+## What data is missing
+f_ball %>% vis_miss(warn_large_data = F) # columns with more than 25% missing will be omitted
+
+```
+
+## create offensive variables
+
+```{r,echo=TRUE, message=FALSE, warning=FALSE}
+## manipulate variables of interest, Offense only
+offense <- f_ball
+
+offense$turnover <- ifelse((offense$IsInterception == 1) | (offense$IsFumble == 1) == TRUE, 1, 0)
+
+
+offense$bigplay <- ifelse((offense$PlayType == "PASS") & (offense$Yards >= 16) == TRUE | 
+                            (offense$PlayType == "RUSH") & (offense$Yards >= 12) == TRUE, 1,0)
+offense$ToGo3<-offense$ToGo
+offense <- offense %>% mutate(ToGo3=replace(ToGo3,Down!=3,"NA"))
+offense$ToGo3 <- as.numeric(offense$ToGo3)
+
+offense$Description <- tolower(offense$Description)
+
+offense <- offense %>% mutate(touchdown = 0) 
+offense <- offense %>% mutate(touchdown=replace(touchdown,str_detect(Description,c("touch down|touchdown|Touchdown|Touch down")),1))
+
+offense <- offense %>% mutate(fieldgoal = 0) 
+offense <- offense %>% mutate(fieldgoal=replace(fieldgoal,str_detect(Description,c("field goal is good|fieldgoal is good")),1))
+
+offense <- offense %>% mutate(extrapoint = 0)
+offense <- offense %>% mutate(extrapoint = replace(extrapoint, str_detect(Description, "extra point is good"),1))
+
+offense <- offense %>% mutate(twopoint = 0)
+offense <- offense %>% mutate(twopoint = replace(twopoint, str_detect(Description, ". attempt succeeds"),1))
+```
+
+# create defensive variables
+
+```{r,echo=TRUE, message=FALSE, warning=FALSE}
+#Manipulate vairable of interest, Defense only
+## Manipulate variables, defense only
+defense <- f_ball
+
+defense$turnover <- ifelse((defense$IsInterception == 1) | (defense$IsFumble == 1) == TRUE, 1, 0)
+defense$bigplay <- ifelse((defense$PlayType == "PASS") & (defense$Yards >= 16) == TRUE | 
+                            (defense$PlayType == "RUSH") & (defense$Yards >= 12) == TRUE, 1,0)
+defense$ToGo3<-defense$ToGo
+defense <- defense %>% mutate(ToGo3=replace(ToGo3,Down!=3,"NA"))
+defense$ToGo3 <- as.numeric(defense$ToGo3)
+
+defense$Description <- tolower(defense$Description)
+
+defense <- defense %>% mutate(touchdown = 0) 
+defense <- defense %>% mutate(touchdown=replace(touchdown,str_detect(Description,c("touch down|touchdown")),1))
+
+defense <- defense %>% mutate(fieldgoal = 0) 
+defense <- defense %>% mutate(fieldgoal=replace(fieldgoal,str_detect(Description,c("field goal is good|fieldgoal is good")),1))
+
+defense <- defense %>% mutate(extrapoint = 0)
+defense <- defense %>% mutate(extrapoint = replace(extrapoint, str_detect(Description, "extra point is good"),1))
+
+defense <- defense %>% mutate(twopoint = 0)
+defense <- defense %>% mutate(twopoint = replace(twopoint, str_detect(Description, ". attempt succeeds"),1))
+
+```
+
+## aggregate offensive and defensive data sets at the week level
+
+```{r,echo=TRUE, message=FALSE, warning=FALSE}
+offense_data <- offense %>% group_by(OffenseTeam, GameId) %>% summarize(ToGo3.o = mean(ToGo3, na.rm= TRUE),
+                                                                        turnover.o = sum(turnover), 
+                                                                        IsSack.o = sum(IsSack), 
+                                                                        bigplay.o = sum(bigplay),
+                                                                        touchdown.o = sum(touchdown),
+                                                                        fieldgoal.o = sum(fieldgoal),
+                                                                        extrapoint.o = sum(extrapoint),
+                                                                        twopoint.o = sum(twopoint))
+offense_data <- offense_data %>% mutate(score.o = (touchdown.o *6)+(fieldgoal.o*3)+(extrapoint.o*1) + (twopoint.o*2))
+
+defense_data <- defense %>% group_by(DefenseTeam, GameId) %>% summarize(ToGo3.d = mean(ToGo3, na.rm= TRUE),
+                                                                        turnover.d = sum(turnover), 
+                                                                        IsSack.d = sum(IsSack), 
+                                                                        bigplay.d = sum(bigplay),
+                                                                        touchdown.d = sum(touchdown),
+                                                                        fieldgoal.d = sum(fieldgoal),
+                                                                        extrapoint.d = sum(extrapoint),
+                                                                        twopoint.d = sum(twopoint))
+defense_data <- defense_data %>% mutate(score.d = (touchdown.d *6)+(fieldgoal.d*3)+(extrapoint.d*1) + (twopoint.d*2))
+
+```
+
+# join two dataframes for analysis
+
+```{r,echo=TRUE, message=FALSE, warning=FALSE}
+# join offense and defense 
+week_level <- inner_join(offense_data, defense_data, by = "GameId")
+
+# create dependent variable
+week_level <- week_level %>% filter(OffenseTeam == DefenseTeam)
+week_level <- week_level %>% mutate(win = ifelse((score.o - score.d > 0) == TRUE, 1,0))   
+week_level <- week_level %>% mutate(turnover_differential = (turnover.d - turnover.o),
+                                    sack_differential = (IsSack.d - IsSack.o),
+                                    big_play_differential = (bigplay.o - bigplay.d),
+                                    dd_differential = (ToGo3.o - ToGo3.d))
+```
+
+## Best and worst teams?
+
+```{r,echo=TRUE, message=FALSE, warning=FALSE}
+# top teams are ravens, packers, chiefs
+week_level %>% group_by(OffenseTeam) %>% summarise(wins = sum(win)) %>% arrange(desc(wins)) %>% head(3) 
+
+# bottom teams are detroit, bengals, and jets
+week_level %>% group_by(OffenseTeam) %>% summarise(wins = sum(win)) %>% arrange((wins)) %>% head(3) 
+
+```
+
+## Exploratory analysis
+
+```{r,echo=TRUE, message=FALSE, warning=FALSE}
+ggplot(week_level, aes(dd_differential, win))+
+  geom_jitter(alpha = 0.4)+
+  geom_smooth(se = F)+ 
+  ggtitle("Teams that keep their opponents offense in longer third downs compared to their \nown have a higher probability of winning")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  xlab("difference between a teams offensive and defensive 3rd down distance")
+
+ 
+ggplot(week_level, aes(big_play_differential, win))+
+  geom_jitter(alpha = 0.4)+
+  geom_smooth(se=F)+ 
+  ggtitle("Teams that have more big plays (16 yard passes and 12 yard rushes) than their \nopponents have a higher probability of winning")+
+  theme(plot.title = element_text(hjust = 0.5))
+
+ 
+ggplot(week_level, aes(turnover_differential, win))+
+  geom_jitter(alpha = 0.4) +
+  geom_smooth(se = F)+
+  ggtitle("Teams that win the turnover battle have a higher probability of winning")+
+  theme(plot.title = element_text(hjust = 0.5))
+
+
+```
+## Running two models
+
+```{r,echo=TRUE, message=FALSE, warning=FALSE}
+set.seed(5)
+model <- glm(win ~ ToGo3.d + ToGo3.o + turnover.d + turnover.o + bigplay.d + bigplay.o + IsSack.d + IsSack.o + bigplay.o + bigplay.d,  data = week_level, family = "binomial")
+set.seed(7)
+model_differentiated <- glm(win~ turnover_differential + big_play_differential + sack_differential + dd_differential, data = week_level, family = "binomial")
+
+```
+
+## Comparing Fit
+
+```{r,echo=TRUE, message=FALSE, warning=FALSE}
+actual <- week_level$win
+predicted <- round(fitted(model))
+outcomes <- table(predicted, actual)
+confusion1 <- conf_mat(outcomes)
+
+predict1 <- round(fitted(model_differentiated))
+outcomes2 <- table(predict1, actual)
+confusion2 <- conf_mat(outcomes2)
+
+summary(confusion1)
+summary(confusion2)
+
+## Model two performs slightly better
+#kappa : .506
+# Sens : .754
+# Spec : .752
+```
+
+## Interpretation
+
+```{r,echo=F, message=FALSE, warning=FALSE}
+summary(model_differentiated)
+
+
+odds_ratio = exp(coef(model_differentiated))
+
+turnover_diff = (round(unname((odds_ratio[2]-1)*100),2))
+big_play_diff = round(unname((odds_ratio[3]-1)*100),2)
+sack_diff = round(unname((odds_ratio[4]-1)*100),2)
+dd_differential = round(unname(abs(((odds_ratio[5]-1)*100))),2) 
+
+
+cat("Turnover differential, big play differential, sack differential, and down & distance differential are allstatisically significant.\nThey can be interpreted as follows:\n\nAll interpretations assume holding other variables constant and are relative to the intercept coefficient.")
+
+paste0("A teams odds of winning a game increase by ", (turnover_diff),"% for each additional turnover their defesne produces compared to their opponent")
+paste0("A teams odds of winning a game increase by ",big_play_diff,"% for each additional big play their offense produces compared to their opponent")
+paste0("A teams odds of winning a game increase by ",sack_diff,"% for each additional QB sack their defense generates compared to their opponent.")
+paste0("A teams odds of winning a game decrease by ",dd_differential,"% for each additional yard a team's offense needs for a conversion compared to their opponents.")
+
+
+```
+
