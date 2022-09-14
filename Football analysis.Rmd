@@ -195,7 +195,7 @@ confusion2 <- conf_mat(outcomes2)
 summary(confusion1)
 summary(confusion2)
 
-## Model two performs slightly better
+## Differentiated model performs slightly better
 #kappa : .506
 # Sens : .754
 # Spec : .752
